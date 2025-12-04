@@ -27,29 +27,43 @@ def parse_contents(contents):
 app = Dash(__name__)
 
 app.layout = html.Div([
-    html.H1("Gyroscope Data Viewer"),
+    html.H1("Data Viewer"),
+    html.Div([
+        # Raw Data Upload
+        html.Div([
+            html.H3("Upload Raw Data CSV"),
+            dcc.Upload(
+                id="upload-raw",
+                children=html.Div(["Drag & Drop or Click to Select RAW CSV"]),
+                style={
+                    "width": "100%",
+                    "height": "60px",
+                    "lineHeight": "60px",
+                    "borderWidth": "1px",
+                    "borderStyle": "dashed",
+                    "textAlign": "center"
+                }
+            )
+        ], style={"flex": "1", "margin-right": "10px"}),
 
-    html.H3("Upload Gyroscope Raw Data CSV"),
-    dcc.Upload(
-        id="upload-raw",
-        children=html.Div(["Drag & Drop or Click to Select RAW CSV"]),
-        style={
-            "width": "60%", "height": "60px", "lineHeight": "60px",
-            "borderWidth": "1px", "borderStyle": "dashed",
-            "textAlign": "center"
-        }
-    ),
+        # Meta Data Upload
+        html.Div([
+            html.H3("Upload Metadata CSV (time info)"),
+            dcc.Upload(
+                id="upload-meta",
+                children=html.Div(["Drag & Drop or Click to Select META CSV"]),
+                style={
+                    "width": "100%",
+                    "height": "60px",
+                    "lineHeight": "60px",
+                    "borderWidth": "1px",
+                    "borderStyle": "dashed",
+                    "textAlign": "center"
+                }
+            )
+        ], style={"flex": "1", "margin-left": "10px"}),
 
-    html.H3("Upload Metadata CSV (START / PAUSE)"),
-    dcc.Upload(
-        id="upload-meta",
-        children=html.Div(["Drag & Drop or Click to Select META CSV"]),
-        style={
-            "width": "60%", "height": "60px", "lineHeight": "60px",
-            "borderWidth": "1px", "borderStyle": "dashed",
-            "textAlign": "center"
-        }
-    ),
+    ], style={"display": "flex", "flex-direction": "row", "width": "100%"}),
 
     html.Hr(),
 
@@ -62,7 +76,7 @@ app.layout = html.Div([
         id='trim-slider',
         min=0, max=1,
         value=[0, 1],
-        step=0.01,
+        step=0.1,
         allowCross=False,
         tooltip={"always_visible": True, "placement": "bottom"},
         marks=None,
@@ -189,17 +203,53 @@ def update_all(trim_range, raw_contents, meta_contents, raw_name, meta_name):
     dff = df_raw[(df_raw["Time (s)"] >= tmin) & (df_raw["Time (s)"] <= tmax)]
 
     # ------------------------------------
+    # Determine measurement type
+    # ------------------------------------    
+    measurement_type = "Unknown"
+    y_axis_title = "NA"
+    if dff.columns[1].lower().startswith("gyro"):
+        measurement_type = "Gyroscope"
+        y_axis_title = "Angular Velocity (rad/s)"
+    elif dff.columns[1].lower().startswith("accel"):
+        measurement_type = "Accelerometer"
+        y_axis_title = "Acceleration (m/s²)"
+
+
+    # ------------------------------------
     # Build plot
     # ------------------------------------
     fig = go.Figure()
-    gyro_cols = [
-        'Gyroscope x (rad/s)',
-        'Gyroscope y (rad/s)',
-        'Gyroscope z (rad/s)',
-        'Absolute (rad/s)'
-    ]
 
-    for col in gyro_cols:
+    if(measurement_type=="Gyroscope"):
+        wx = np.array(dff["Gyroscope x (rad/s)"])  # rad/s
+        wy = np.array(dff["Gyroscope y (rad/s)"])
+        wz = np.array(dff["Gyroscope z (rad/s)" ])
+        # 1) magnitude
+        w_mag = np.sqrt(wx**2 + wy**2 + wz**2)
+
+        # 2) integrate each component to get angle (trapezoidal integration)
+        angle_x = np.zeros_like(wx)
+        angle_y = np.zeros_like(wy)
+        angle_z = np.zeros_like(wz)
+        for i in range(1, len(dff["Time (s)"])):
+            dt = dff["Time (s)"].iloc[i] - dff["Time (s)"].iloc[i-1]
+            angle_x[i] = angle_x[i-1] + 0.5*(wx[i-1] + wx[i])*dt
+            angle_y[i] = angle_y[i-1] + 0.5*(wy[i-1] + wy[i])*dt
+            angle_z[i] = angle_z[i-1] + 0.5*(wz[i-1] + wz[i])*dt
+
+        angle_mag = np.sqrt(angle_x**2 + angle_y**2 + angle_z**2)
+        # Add angle data to dff for plotting
+        dff["Angle x (rad)"] = angle_x
+        dff["Angle y (rad)"] = angle_y  
+        dff["Angle z (rad)"] = angle_z
+        dff["Angle magnitude (rad)"] = angle_mag
+
+    data_cols = list() 
+    for col in dff.columns:
+        if not "time" in col.lower():
+            data_cols.append(col)
+
+    for col in data_cols:
         if col in dff.columns:
             fig.add_trace(go.Scatter(
                 x=dff["true_time"],
@@ -207,18 +257,47 @@ def update_all(trim_range, raw_contents, meta_contents, raw_name, meta_name):
                 mode="lines",
                 name=col
             ))
+        if col.lower().startswith("absolute"):
+            # Add mean line
+            fig.add_trace(go.Scatter(
+                x=dff["true_time"],
+                y=[dff[col].mean()] * len(dff),
+                mode='lines',
+                name=f"{col} mean",
+                line=dict(dash='dash'),
+                visible='legendonly'
+            ))
+
+            # Add STD band (±1σ)
+            fig.add_trace(go.Scatter(
+                x=dff["true_time"],
+                y=[dff[col].mean() + dff[col].std()] * len(dff),
+                mode='lines',
+                name=f"{col} +1σ",
+                line=dict(dash='dot'),
+                visible='legendonly'
+            ))
+
+            fig.add_trace(go.Scatter(
+                x=dff["true_time"],
+                y=[dff[col].mean() - dff[col].std()] * len(dff),
+                mode='lines',
+                name=f"{col} -1σ",
+                line=dict(dash='dot'),
+                visible='legendonly'
+            ))
 
     fig.update_layout(
-        title="Gyroscope Measurements",
-        xaxis_title="True Time",
-        yaxis_title="Angular Velocity (rad/s)",
+        title=f"{measurement_type} Measurements",
+        xaxis_title="Time",
+        yaxis_title=y_axis_title,
         hovermode="x unified"
     )
 
     # ------------------------------------
     # Stats
     # ------------------------------------
-    stats_text = dff[gyro_cols].agg(['mean', 'std']).to_string()
+    stats_text = dff[data_cols].agg(['mean', 'std']).to_string()
 
     # ------------------------------------
     # Slider text

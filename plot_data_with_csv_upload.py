@@ -2,10 +2,10 @@ import base64
 import io
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dash import Dash, dcc, html, Input, Output, State
 import plotly.graph_objs as go
-
+from zoneinfo import ZoneInfo
 # -------------------------------------------------------------------
 # Helper: decode uploaded file
 # -------------------------------------------------------------------
@@ -161,9 +161,8 @@ def update_all(trim_range, raw_contents, meta_contents, raw_name, meta_name):
             f"Meta file error: {e}"
         )
 
-    # Convert UNIX → datetime
-    start_dt = datetime.fromtimestamp(start_system_time)
-    pause_dt = datetime.fromtimestamp(pause_system_time)
+    start_dt = datetime.fromtimestamp(start_system_time, ZoneInfo("Europe/Berlin"))
+    pause_dt = datetime.fromtimestamp(pause_system_time, ZoneInfo("Europe/Berlin"))
 
     # ------------------------------------
     # Build true timestamps
